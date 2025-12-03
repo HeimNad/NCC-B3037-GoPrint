@@ -1,4 +1,4 @@
-# HP P3015 Web Print Service (Extended Edition) 🖨️
+# HP P3015 Web Print Service 🖨️
 
 A robust, driverless web print server written in Go. This tool provides a modern web interface that allows users to upload **Office documents and PDFs** directly to an **HP LaserJet P3015** (or similar legacy HP printers) without installing any drivers on the client device.
 
@@ -6,69 +6,54 @@ It is specifically engineered to solve common **"PDF Memory Overflow"** errors o
 
 ## ✨ Features
 
-* **📄 Comprehensive File Support**: Now supports **Word (`.doc`, `.docx`), Excel (`.xls`, `.xlsx`), PowerPoint (`.ppt`, `.pptx`)**, in addition to PDF, PS, and TXT.
-* **🧠 Smart Conversion Pipeline**:
-    * **Office Files**: Automatically converted to PDF using headless LibreOffice.
-    * **PDF Files**: Rasterized and optimized to **PostScript Level 2** using Ghostscript to prevent printer crashes.
-* **🚀 Driverless Printing**: Users simply upload files via a web browser (Mobile & Desktop friendly).
-* **🔒 HTTPS Bypass**: Uses `curl` internally to handle the printer's legacy self-signed certificates (`-k` mode) seamlessly.
-* **💻 Cross-Platform**: Optimized for Linux (Ubuntu/Debian) servers, but fully compatible with macOS and Windows.
+  * **🖥️ System Health Dashboard**: The web interface now includes a real-time **System Diagnosis** panel. It automatically checks if Ghostscript, LibreOffice, and Curl are installed and linked correctly.
+  * **🔧 Custom Path Configuration**: You can now explicitly specify the paths for dependencies via command-line flags (perfect for Windows environments or non-standard Linux installs).
+  * **📄 Comprehensive File Support**: Supports **Word (`.doc`, `.docx`), Excel (`.xls`, `.xlsx`), PowerPoint (`.ppt`, `.pptx`)**, PDF, PS, and TXT.
+  * **🧠 Smart Conversion**: Office files are converted to PDF, then rasterized to **PostScript Level 2** to prevent printer crashes.
+  * **🚀 Driverless & Cross-Platform**: Optimized for Linux, Windows, and macOS.
 
 ## 🛠️ Prerequisites
 
 To ensure the conversion pipeline works, the host machine **must** have the following installed:
 
-### 1. Linux (Ubuntu/Debian) - *Recommended*
-
-You need Ghostscript for PDF processing, Curl for transmission, and LibreOffice for Word/Excel conversion. **Crucially, you must install fonts if printing non-English documents.**
+### 1\. Linux (Ubuntu/Debian) - *Recommended*
 
 ```bash
 sudo apt update
-
 # Install core dependencies
 sudo apt install ghostscript curl libreoffice -y
-
-# Install Chinese/International fonts (Prevents squares/garbled text in Word files)
+# Install fonts (Prevents squares/garbled text in Word files)
 sudo apt install fonts-wqy-zenhei fonts-wqy-microhei -y
-````
+```
 
 ### 2\. macOS
 
-⚠️ **Recommendation:** Use [Homebrew](https://brew.sh) for easy installation.
-
-You need Ghostscript for PDF processing and LibreOffice for Word/Excel conversion. **The application automatically detects LibreOffice in `/Applications/LibreOffice.app`.**
+**Note:** The application automatically detects LibreOffice in `/Applications/LibreOffice.app`.
 
 ```bash
-# 1. Install dependencies
-brew update
+# Install dependencies via Homebrew
 brew install curl ghostscript
 brew install --cask libreoffice
 
-# 2. Install Chinese/International fonts (Prevents squares/garbled text in Word files)
+# Install fonts
 brew tap homebrew/cask-fonts
 brew install --cask font-wqy-zenhei font-wqy-microhei
 ```
 
 ### 3\. Windows
 
-1.  **Ghostscript**: Install [Ghostscript for Windows](https://www.ghostscript.com/releases/gsdnld.html).
-2.  **LibreOffice**: Install [LibreOffice](https://www.libreoffice.org/download/download-libreoffice/). **Important:** During installation, ensure `soffice.exe` is added to your System PATH.
-3.  **Curl**: Standard on Windows 10/11.
+1.  **Ghostscript**: Install [Ghostscript](https://www.ghostscript.com/releases/gsdnld.html).
+2.  **LibreOffice**: Install [LibreOffice](https://www.libreoffice.org/).
+3.  **Curl**: Built-in on Windows 10/11.
+      * *Note: On Windows, you can pass the installation paths via flags if they are not in the System PATH.*
 
 ## 🚀 Quick Start
 
 ### 1\. Get the Application
 
-**Option A: Download Binary**
-Download the latest pre-compiled binary for your system from the [GitHub Releases](https://www.google.com/search?q=https://github.com/your-username/repo-name/releases) page.
-
-**Option B: Build from Source**
-
 ```bash
-# Initialize module
+# Build from source
 go mod init print-server
-
-# Build binary
 go build -o printer-service main.go
 ```
 
@@ -80,32 +65,50 @@ By default, the server listens on port `8080` and targets the printer at `10.31.
 ./printer-service
 ```
 
-  * **Access:** Open your browser and navigate to `http://localhost:8080`
-  * **Upload Limit:** The server accepts files up to **50MB**.
+When started, the console will display the detected environment:
 
-### 3\. Custom Configuration (Flags)
-
-You can override the defaults using command-line flags:
-
-```bash
-# Example: Change port and printer IP
-./printer-service -port="9000" -ip="192.168.1.50"
-
-# Example: Specify custom Ghostscript path (if not in PATH)
-./printer-service -gs="/usr/local/bin/gs"
+```text
+🚀 Print Server Started on :8080
+🖨️  Target Printer IP: 10.31.6.225
+----------------------------------------
+🖥️  System: windows/amd64 (Server-PC)
+📄 Ghostscript:  ✅ Found
+📊 LibreOffice:  ✅ Found
+🌐 Curl Utility: ✅ Found
 ```
 
-| Flag | Default | Description |
+### 3\. Configuration & Flags (New\!)
+
+You can override defaults and specify paths explicitly. This is especially useful on Windows.
+
+**Command Line Arguments:**
+
+| Flag | Default (Auto-detected) | Description |
 | :--- | :--- | :--- |
 | `-port` | `8080` | Web server listening port |
 | `-ip` | `10.31.6.225` | Target HP Printer IP address |
-| `-gs` | `gs` (or `gswin64c`) | Path to the Ghostscript executable |
+| `-gs` | `gs` (Linux/Mac) or `gswin64c` (Win) | Path to Ghostscript executable |
+| `-office` | `libreoffice` (Linux) or `soffice` | Path to LibreOffice/OpenOffice executable |
 
-*(Note: LibreOffice command is auto-detected as `libreoffice` on Linux and `soffice` on Windows/macOS).*
+**Examples:**
 
-## ⚙️ How It Works (The Pipeline)
+**Linux/Mac (Custom Port):**
+
+```bash
+./printer-service -port="9090" -ip="192.168.1.50"
+```
+
+**Windows (Specifying Paths):**
+If dependencies are not in your System PATH, point to them directly:
+
+```bash
+printer-service.exe -office "C:\Program Files\LibreOffice\program\soffice.exe" -gs "C:\Program Files\gs\gs9.54\bin\gswin64c.exe"
+```
+
+## ⚙️ How It Works
 
 ```mermaid
+flowchart TD
     A[User Upload] -->|Office Doc| B(LibreOffice)
     A -->|PDF| C(Ghostscript)
     B -->|Convert to PDF| C
@@ -114,41 +117,25 @@ You can override the defaults using command-line flags:
 ```
 
 1.  **Ingest**: User uploads a file.
-2.  **Detection & Conversion**:
-      * **Office Files**: The server invokes `libreoffice --headless` to convert the document to **PDF**.
-      * **PDF Files**: The server invokes `gs` to convert the PDF (or the one generated from Office) into **PostScript Level 2**. This "flattens" the file, reducing memory usage on the printer.
-      * *GS Command used*: `-sDEVICE=ps2write -dLanguageLevel=2 -sPAPERSIZE=letter`.
-3.  **Transmission**: The server uses `curl` to POST the final `.ps` file to the printer's internal API (`/hp/device/this.printservice`), bypassing SSL errors.
+2.  **Diagnosis**: The UI shows real-time status of server dependencies.
+3.  **Conversion**:
+      * **Office Files**: Invokes `libreoffice --headless` to convert to **PDF**.
+      * **Optimization**: Invokes `gs` to convert PDF to **PostScript Level 2** (flattens transparency and fonts).
+4.  **Transmission**: Uses `curl` to POST the final stream to the printer.
 
 ## ⚠️ Troubleshooting
 
-**Q: Office files (Word/PPT) print with squares or garbage characters.**
+**Q: The "System Diagnosis" panel shows "MISSING" for LibreOffice.**
 
-  * **Cause**: The server is missing the necessary fonts.
-  * **Fix (Linux)**: Install font packages: `sudo apt install fonts-wqy-zenhei`.
-  * **Fix (macOS)**: Install fonts via Brew or verify System Fonts.
-  * **Fix (Windows)**: Ensure the fonts used in the document are installed on the server machine.
+  * **Fix**: Ensure LibreOffice is installed. If it is installed but not detected, find the path to `soffice` (or `soffice.exe`) and run the server with the `-office "/path/to/soffice"` flag.
 
-**Q: Error "LibreOffice not found" or "exec: executable file not found".**
+**Q: Office files print with squares.**
 
-  * **Cause**: LibreOffice is not installed or not in the system PATH.
-  * **Fix (macOS)**: Run the `sudo ln -s ...` command listed in the Prerequisites section.
-  * **Fix (Windows)**: Add LibreOffice installation folder to your Environment Variables.
-
-**Q: Error "PDF conversion failed".**
-
-  * **Cause**: Ghostscript is missing.
-  * **Fix**: Verify installation with `gs --version`.
+  * **Fix**: The server is missing fonts. Install `fonts-wqy-zenhei` (Linux) or standard system fonts (Windows/Mac).
 
 **Q: Paper Size Issues (Letter vs A4).**
 
-  * **Fix**: The code currently defaults to **Letter**. To change to A4, edit `main.go`:
-    ```go
-    // In func execGS, change:
-    "-sPAPERSIZE=letter",
-    // To:
-    "-sPAPERSIZE=a4",
-    ```
+  * **Fix**: Edit `main.go`. Look for `-sPAPERSIZE=letter` in the `execGS` function and change it to `a4`.
 
 ## 📄 License
 
