@@ -18,11 +18,11 @@ import (
 var (
 	defaultPort      = "8080"
 	defaultPrinterIP = "10.31.6.225"
-	// "gs" command auto-detected based on OS
-	gsCommand = "gs"
+	gsCommand        = "gs"
+	officeCommand    = "libreoffice"
 )
 
-// HTML Template (English)
+// HTML Template
 const htmlTemplateStr = `
 <!DOCTYPE html>
 <html lang="en">
@@ -71,8 +71,8 @@ const htmlTemplateStr = `
             <div class="upload-area">
                 <span class="icon">📄</span>
                 <p id="fileLabel" style="margin:0; font-weight:500; color:#3c4043;">Click to select file</p>
-                <p style="font-size: 12px; color: #5f6368; margin-top:5px;">Supports: PDF, PS, TXT</p>
-                <input type="file" name="file" required accept=".pdf,.ps,.prn,.txt" onchange="handleFileSelect(this)">
+                <p style="font-size: 12px; color: #5f6368; margin-top:5px;">Supports: Word, Excel, PPT, PDF</p>
+                <input type="file" name="file" required accept=".pdf,.ps,.prn,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx" onchange="handleFileSelect(this)">
             </div>
             <button type="submit" id="submitBtn" class="btn" disabled>Print Now</button>
         </form>
@@ -84,8 +84,8 @@ const htmlTemplateStr = `
         {{end}}
 
         <div class="tech-info">
-            System: Ubuntu 22.04 LTS | Engine: Go + Ghostscript<br>
-            Note: PDF files are automatically optimized to prevent printer memory errors.
+            Engine: Go + Ghostscript + LibreOffice<br>
+            Note: Office files are converted to PDF, then optimized for printer memory.
         </div>
     </div>
 </body>
@@ -93,27 +93,32 @@ const htmlTemplateStr = `
 `
 
 func main() {
-	// Auto-detect OS for Ghostscript command
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		gsCommand = "gswin64c"
-	} else {
-		gsCommand = "gs" // Linux standard command
+		// On Windows, assume LibreOffice is installed as "soffice"
+		officeCommand = "soffice"
+	case "darwin":
+		gsCommand = "gs"
+		officeCommand = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+	default:
+		gsCommand = "gs"
+		officeCommand = "libreoffice"
 	}
 
 	port := flag.String("port", defaultPort, "Server Port")
 	printerIP := flag.String("ip", defaultPrinterIP, "Printer IP Address")
-	gsPath := flag.String("gs", gsCommand, "Path to Ghostscript executable")
 	flag.Parse()
 
-	gsCommand = *gsPath
 	targetURL := fmt.Sprintf("https://%s/hp/device/this.printservice?printThis", *printerIP)
 
-	// Check GS availability
-	if !checkGS() {
-		fmt.Println("⚠️  WARNING: Ghostscript ('gs') not found.")
-		fmt.Println("   PDF conversion will fail. Please install it via: sudo apt install ghostscript")
-	} else {
-		fmt.Printf("✅ Ghostscript found: %s\n", gsCommand)
+	// Check Dependencies
+	if !checkCommand(gsCommand) {
+		fmt.Println("⚠️  WARNING: Ghostscript ('gs') not found. PDF Optimization will fail.")
+	}
+	if !checkCommand(officeCommand) {
+		fmt.Println("⚠️  WARNING: LibreOffice not found. Word/Excel/PPT conversion will fail.")
+		fmt.Println("   Install via: sudo apt install libreoffice")
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -130,8 +135,8 @@ func main() {
 }
 
 func handleUpload(w http.ResponseWriter, r *http.Request, targetURL string) {
-	// 1. Limit upload size (e.g., 20MB)
-	r.ParseMultipartForm(20 << 20)
+	// limit upload size to 50MB
+	r.ParseMultipartForm(50 << 20)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -140,12 +145,15 @@ func handleUpload(w http.ResponseWriter, r *http.Request, targetURL string) {
 	}
 	defer file.Close()
 
-	// Save uploaded file to temp
-	tempInput, err := os.CreateTemp("", "print_upload_*.tmp")
+	// save to temp file
+	// Note: LibreOffice is sensitive to file extensions, so keep the original extension (.docx, .xlsx, etc.)
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	tempInput, err := os.CreateTemp("", "upload_*"+ext)
 	if err != nil {
 		render(w, "Server Error: Cannot create temp file.", "error")
 		return
 	}
+	// Note: We don't immediately defer remove here because the path might be needed later; we'll clean up at the end
 	defer os.Remove(tempInput.Name())
 	defer tempInput.Close()
 
@@ -154,52 +162,110 @@ func handleUpload(w http.ResponseWriter, r *http.Request, targetURL string) {
 		render(w, "Server Error: File save failed.", "error")
 		return
 	}
-	tempInput.Close()
+	tempInput.Close() // Close handle to allow external programs to access
 
 	finalFilePath := tempInput.Name()
+	currentExt := ext
 	statusMsg := fmt.Sprintf("✅ Success! '%s' sent to printer.", header.Filename)
 
-	// 2. Logic: If PDF, convert via Ghostscript
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext == ".pdf" {
-		fmt.Printf("🔄 Converting PDF: %s ...\n", header.Filename)
+	// --- Stage 1: If it's an Office file, convert to PDF first ---
+	if isOfficeFile(currentExt) {
+		fmt.Printf("📄 Detecting Office file (%s). Converting to PDF via LibreOffice...\n", currentExt)
 
-		tempOutput := tempInput.Name() + ".ps"
+		// Generate PDF path (LibreOffice will generate .pdf in the same directory)
+		// This logic is a bit tricky: LibreOffice --outdir specifies the output directory
+		outputDir := os.TempDir()
 
-		// Ghostscript arguments for Linux
-		err := execGS(tempInput.Name(), tempOutput)
+		err := convertOfficeToPDF(tempInput.Name(), outputDir)
 		if err != nil {
-			fmt.Printf("❌ Conversion Failed: %v\n", err)
-			render(w, "Error: PDF conversion failed. The server might be missing Ghostscript.", "error")
+			fmt.Printf("❌ LibreOffice Failed: %v\n", err)
+			render(w, "Error: Office conversion failed. Server might miss fonts or LibreOffice.", "error")
 			return
 		}
 
-		finalFilePath = tempOutput
-		defer os.Remove(tempOutput)
-		statusMsg += " (Optimized via Ghostscript)"
-		fmt.Println("✅ Conversion done.")
+		// Calculate generated PDF filename
+		// CreateTemp generates a filename like /tmp/upload_123.docx
+		// LibreOffice will generate /tmp/upload_123.pdf
+		baseName := strings.TrimSuffix(filepath.Base(tempInput.Name()), currentExt)
+		pdfPath := filepath.Join(outputDir, baseName+".pdf")
+
+		// Update current processing file path and extension
+		finalFilePath = pdfPath
+		currentExt = ".pdf"
+		defer os.Remove(pdfPath) // Clean up intermediate file after conversion
+
+		statusMsg += " (Converted to PDF)"
+		fmt.Println("✅ Office -> PDF done.")
 	}
 
-	// 3. Send to Printer
+	// --- Stage 2: If it's a PDF (uploaded or just converted), convert to PS via GS ---
+	if currentExt == ".pdf" {
+		fmt.Printf("🔄 Optimizing PDF via Ghostscript...\n")
+
+		// Generate PS temp file
+		psTemp, _ := os.CreateTemp("", "optimized_*.ps")
+		psPath := psTemp.Name()
+		psTemp.Close()
+		defer os.Remove(psPath)
+
+		err := execGS(finalFilePath, psPath)
+		if err != nil {
+			fmt.Printf("❌ GS Conversion Failed: %v\n", err)
+			render(w, "Error: PDF optimization failed.", "error")
+			return
+		}
+
+		finalFilePath = psPath
+		statusMsg += " (Optimized via Ghostscript)"
+		fmt.Println("✅ PDF -> PS done.")
+	}
+
+	// --- Stage 3: Send to printer ---
 	err = sendToPrinter(finalFilePath, targetURL)
 	if err != nil {
 		fmt.Printf("❌ Send Failed: %v\n", err)
-		render(w, fmt.Sprintf("Printer Error: %v. Check if printer is online.", err), "error")
+		render(w, fmt.Sprintf("Printer Error: %v. Check connection.", err), "error")
 		return
 	}
 
 	render(w, statusMsg, "success")
 }
 
+// Check if the file is an Office document
+func isOfficeFile(ext string) bool {
+	switch ext {
+	case ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx":
+		return true
+	}
+	return false
+}
+
+// using LibreOffice to convert Office files to PDF
+func convertOfficeToPDF(inputPath, outputDir string) error {
+	// command: libreoffice --headless --convert-to pdf --outdir /tmp /tmp/file.docx
+	cmd := exec.Command(officeCommand,
+		"--headless",
+		"--convert-to", "pdf",
+		"--outdir", outputDir,
+		inputPath,
+	)
+
+	// Capture output for debugging
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("libreoffice error: %v, output: %s", err, string(output))
+	}
+	return nil
+}
+
 func execGS(inputPath, outputPath string) error {
-	// Recommended settings for HP P3015 compatibility
 	cmd := exec.Command(gsCommand,
 		"-dNOPAUSE",
 		"-dBATCH",
 		"-dSAFER",
-		"-sDEVICE=ps2write", // PS Level 2 is safer for old printers
+		"-sDEVICE=ps2write",
 		"-dLanguageLevel=2",
-		"-sPAPERSIZE=letter", // Default to letter, change to 'A4' if you need
+		"-sPAPERSIZE=letter",
 		"-sOutputFile="+outputPath,
 		inputPath,
 	)
@@ -214,28 +280,19 @@ func execGS(inputPath, outputPath string) error {
 }
 
 func sendToPrinter(filePath, url string) error {
-	fmt.Println("⚡ Switching to Curl mode due to certificate error...")
-
-	// curl command:
-	// -k: ignore certificate errors
-	// -F: form data
-	// LocalFile=@...: file uri
-	// htxtRedirect=...: form field
+	fmt.Println("⚡ Sending via Curl...")
 	cmd := exec.Command("curl",
 		"-k",
 		"-F", fmt.Sprintf("LocalFile=@%s", filePath),
 		"-F", "htxtRedirect=hp.Print",
 		url,
 	)
-
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-
 	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("curl failed: %v | Log: %s", err, stderr.String())
 	}
-
 	return nil
 }
 
@@ -247,7 +304,7 @@ func render(w http.ResponseWriter, msg, statusClass string) {
 	}{msg, statusClass})
 }
 
-func checkGS() bool {
-	_, err := exec.LookPath(gsCommand)
+func checkCommand(cmdName string) bool {
+	_, err := exec.LookPath(cmdName)
 	return err == nil
 }
