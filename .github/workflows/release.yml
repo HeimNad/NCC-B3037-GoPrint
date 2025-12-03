@@ -9,25 +9,21 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build:
     name: Build ${{ matrix.os }}/${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          # Linux
           - os: linux
             arch: amd64
             output_name: printer-server-linux-amd64
-          # Windows
           - os: windows
             arch: amd64
             output_name: printer-server-windows-amd64.exe
-          # macOS (Apple Silicon)
           - os: darwin
             arch: arm64
             output_name: printer-server-mac-arm64
-          # macOS (Intel)
           - os: darwin
             arch: amd64
             output_name: printer-server-mac-amd64
@@ -48,8 +44,29 @@ jobs:
         run: |
           go build -o ${{ matrix.output_name }} main.go
 
-      - name: Upload to Release
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ matrix.output_name }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: List files (Debug)
+        run: ls -R
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ${{ matrix.output_name }}
+          files: printer-server-*
+          token: ${{ secrets.GITHUB_TOKEN }}
